@@ -755,5 +755,5 @@ if __name__ == "__main__":
         print("\nInterrupt received, exitting!")
         exit(0)
     except Exception as exc:
-        print("[bold red]Exception occurred: ", exc)
+        print("\n[bold red]Exception occurred: ", exc)
         exit(-1)
