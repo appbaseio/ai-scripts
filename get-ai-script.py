@@ -46,6 +46,9 @@ for package, version in required_packages.items():
 # Import requests since we will need to use it
 import requests
 
+def run_script(script):
+    subprocess.check_call([sys.executable, script])
+
 def pull_script(url, name, dir) -> str:
     """
     Pull the script as specified by the user.
@@ -84,7 +87,7 @@ def main():
         script_path = pull_script(script_to_url.get(script_name, None), script_name, tmpdir)
         if script_path is not None:
             # Import it and run main()
-            module = import_module("tmp.knn")
+            module = import_module(f"tmp.{script_name}")
             main_method = getattr(module, "main")
             main_method()
     finally:
