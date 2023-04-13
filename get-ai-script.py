@@ -13,6 +13,7 @@ import tempfile
 import shutil
 from os import path, mkdir, getcwd
 from importlib import import_module
+from importlib import util
 
 this_python = sys.version_info[:2]
 min_version = (3, 7)
@@ -38,7 +39,7 @@ script_to_url = {
 }
     
 for package, version in required_packages.items():
-    if package not in sys.modules:
+    if util.find_spec(package) is None:
         print(f"{package}: is not installed but is a dependency, installing it!")
         install_package(f"{package}=={version}")
     
