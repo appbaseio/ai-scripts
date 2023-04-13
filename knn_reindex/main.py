@@ -598,7 +598,7 @@ def reindexed_name(index_name: str) -> str:
     return "_".join(tokens)
 
 
-if __name__ == "__main__":
+def main():
     """
       Entry point into the script.
 
@@ -757,3 +757,7 @@ if __name__ == "__main__":
     except Exception as exc:
         print("\n[bold red]Exception occurred: ", exc)
         exit(-1)
+
+
+if __name__ == "__main__":
+    main()
