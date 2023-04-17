@@ -7,6 +7,7 @@
 # for the script are installed and will install the package
 # dependencies if they are not present already.
 
+import requests
 import sys
 import subprocess
 import tempfile
@@ -29,25 +30,28 @@ if this_python < min_version:
 def install_package(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
+
 required_packages = {
     "rich": "13.3.3",
     "requests": "2.28.2"
 }
 
 script_to_url = {
-    "knn": "https://raw.githubusercontent.com/appbaseio/ai-scripts/master/knn_reindex/main.py"
+    "knn": "https://raw.githubusercontent.com/appbaseio/ai-scripts/master/knn_reindex/main.py",
+    "metadata": "https://raw.githubusercontent.com/appbaseio/ai-scripts/master/metadata/main.py"
 }
-    
+
 for package, version in required_packages.items():
     if util.find_spec(package) is None:
         print(f"{package}: is not installed but is a dependency, installing it!")
         install_package(f"{package}=={version}")
-    
+
 # Import requests since we will need to use it
-import requests
+
 
 def run_script(script):
     subprocess.check_call([sys.executable, script])
+
 
 def pull_script(url, name, dir) -> str:
     """
@@ -68,6 +72,7 @@ def pull_script(url, name, dir) -> str:
     open(file_path, "wb").write(file_response.content)
     return file_path
 
+
 def main():
     tmpdir = None
     try:
@@ -84,7 +89,8 @@ def main():
         if script_name not in script_to_url:
             print(f"{script_name}: not a recognized script!")
 
-        script_path = pull_script(script_to_url.get(script_name, None), script_name, tmpdir)
+        script_path = pull_script(script_to_url.get(
+            script_name, None), script_name, tmpdir)
         if script_path is not None:
             # Import it and run main()
             module = import_module(f"tmp.{script_name}")
@@ -97,5 +103,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
