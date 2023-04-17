@@ -323,6 +323,29 @@ def enriched_fields_setup(
     # Pull the original settings of the temporary index
     original_settings = get_settings(index_url, index_name, True)
 
+    # Inject the new mappings
+    props[meta_field_name] = {
+        "type": "text",
+        "fields": {
+            "autosuggest": {
+                "type": "text",
+                "analyzer": "autosuggest_analyzer",
+                "search_analyzer": "standard"
+            },
+            "keyword": {
+                "type": "keyword"
+            },
+            "search": {
+                "type": "text",
+                "analyzer": "ngram_analyzer",
+                "search_analyzer": "standard"
+            }
+        }
+    }
+
+    props[meta_time_field_name] = {"type": "date"}
+    mappings["properties"] = props
+
     create_body = {
         "mappings": mappings,
         "settings": original_settings
