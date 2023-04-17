@@ -469,6 +469,34 @@ def fetch_synonyms_from_open_ai(field_value: str, openai_key: str) -> List[str]:
     return as_json.get("synonyms", [])
 
 
+def index_document(
+    base_url: str,
+    index_name: str,
+    doc: Dict,
+    doc_id: str
+) -> bool:
+    """
+    Index the document and consider upserting as well.
+
+    We will also use the ID present in the older document
+    """
+    update_URL = urljoin(base_url, f"{index_name}/_update/{doc_id}")
+
+    update_body = {"doc": doc, "doc_as_upsert": True}
+
+    update_response = post(update_URL,
+                           json=update_body,
+                           headers={"Content-Type": "application/json"})
+
+    if not update_response.ok:
+        print("Failed to index document, got status code: ",
+              update_response.status_code)
+        print("Response received on failure is: ", update_response.json())
+        return False
+
+    return True
+
+
 def main():
     """
     Entry point into the script.
@@ -516,17 +544,31 @@ def main():
 
             all_synonyms = []
 
+            doc_source = doc.get("_source", {})
+            doc_id = doc.get("_id", "")
+
             for field in FIELDS_TO_ENRICH:
                 field_synonyms = fetch_synonyms_from_open_ai(
-                    doc.get(field, ""),
+                    doc_source.get(field, ""),
                     open_ai_api_key
                 )
                 all_synonyms.extend(field_synonyms)
 
-            doc[ENRICHED_FIELD_NAME] = all_synonyms
-            doc[ENRICH_TIME_FIELD] = time_ns() // 1_000_000
+            doc_source[ENRICHED_FIELD_NAME] = all_synonyms
+            doc_source[ENRICH_TIME_FIELD] = time_ns() // 1_000_000
 
-            # TODO: Create the doc by upserting it.
+            # Create the doc by upserting it.
+            is_created = index_document(
+                source_index_url,
+                index_to_work_on,
+                doc_source,
+                doc_id,
+            )
+
+            if not is_created:
+                print("Failed to index document with ID: ", doc_id)
+            else:
+                print("Indexed document with ID: ", doc_id)
 
     except KeyboardInterrupt:
         # Exit gracefully!
