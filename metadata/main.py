@@ -8,6 +8,8 @@ dataField(s) that the user specifies.
 from typing import List, Dict, Tuple
 from urllib.parse import urljoin
 from re import match
+from json import loads
+from time import time_ns
 
 from rich.prompt import Prompt
 from rich import print
@@ -422,6 +424,51 @@ def fetch_all_docs(index_url: str) -> List[Dict]:
     return total_hits
 
 
+def fetch_synonyms_from_open_ai(field_value: str, openai_key: str) -> List[str]:
+    """
+    Fetch the synonyms from OpenAI for the passed value.
+    """
+    if field_value == "":
+        return []
+
+    openai_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {
+                "role": "system",
+                "content": "You're a helpful assistant"
+            },
+            {
+                "role": "user",
+                "content": f"Give me 10 synonyms for '{field_value}' in JSON format."
+            }
+        ]
+    }
+
+    headers = {
+        "Authorization": f"Bearer {openai_key}",
+        "Content-Type": "application/json"
+    }
+
+    openai_url = "https://api.openai.com/v1/chat/completions"
+    openai_response = post(openai_url, headers=headers, json=openai_body)
+
+    if not openai_response.ok:
+        print("Got non OK response code from OpenAI: ",
+              openai_response.status_code)
+        return []
+
+    response_json = openai_response.json()
+    choices = response_json.get("choices", [])
+
+    if not len(choices):
+        return []
+
+    response_as_str = choices[0].get("messages", {}).get("content", {})
+    as_json = loads(response_as_str)
+    return as_json.get("synonyms", [])
+
+
 def main():
     """
     Entry point into the script.
@@ -438,6 +485,8 @@ def main():
         source_index_url = inputs.get("cluster_url", "")
         source_index_name = get_index_alias(
             source_index_url, inputs.get("index_name", ""))
+
+        open_ai_api_key = inputs.get("open_ai_api_key", "")
 
         # There are two scenarios for the index field:
         #
@@ -464,7 +513,20 @@ def main():
             # one by one using the API.
             #
             # Create the doc in the index by doing an upsert.
-            pass
+
+            all_synonyms = []
+
+            for field in FIELDS_TO_ENRICH:
+                field_synonyms = fetch_synonyms_from_open_ai(
+                    doc.get(field, ""),
+                    open_ai_api_key
+                )
+                all_synonyms.extend(field_synonyms)
+
+            doc[ENRICHED_FIELD_NAME] = all_synonyms
+            doc[ENRICH_TIME_FIELD] = time_ns() // 1_000_000
+
+            # TODO: Create the doc by upserting it.
 
     except KeyboardInterrupt:
         # Exit gracefully!
