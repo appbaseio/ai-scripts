@@ -189,7 +189,7 @@ def ask_user_inputs():
             "default": ENRICHED_FIELD_NAME,
             "validate_func": true_validate
         },
-        "vector_time_df_name": {
+        "enrich_time_field": {
             "name": "Enriched time datafield name",
             "description":
             "Enter the field where the timestamp of when the field was enriched will be stored",
@@ -357,7 +357,7 @@ def enriched_fields_setup(
 
     if not create_response.ok:
         err_msg = "error while creating index, got non OK response code: " + \
-            create_response.status_code
+            str(create_response.status_code)
         print(err_msg)
         print("response received from create index: ", create_response.json())
         raise Exception(err_msg)
