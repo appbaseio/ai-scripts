@@ -11,7 +11,7 @@ from re import match
 
 from rich.prompt import Prompt
 from rich import print
-from requests import get, put
+from requests import get, put, post
 
 # Following variable should be updated according
 # to the users requirements
@@ -340,6 +340,88 @@ def enriched_fields_setup(
     return temp_index, True
 
 
+def get_count_for_index(index_url: str) -> int:
+    """
+      Fetch the count for the passed index
+      """
+    count_URL = index_url + "/_count"
+    count_response = get(count_URL)
+
+    if not count_response.ok:
+        raise Exception(f"could not determine total document count in \
+                index, received: {count_response.status_code}")
+
+    return count_response.json().get("count", 0)
+
+
+def fetch_all_docs(index_url: str) -> List[Dict]:
+    """
+    Fetch all the documents from the source index in order to iterate through
+    them and re-index them with the embeddings added.
+    """
+
+    def make_deep_page_call(search_url: str,
+                            sort: List,
+                            search_after: List = None) -> List:
+        """
+            Make the deep-pagination call based on the sort value
+            """
+        # If the search_after value is not present, we need to ignore it.
+        search_body = {"size": 10000, "sort": sort}
+
+        if search_after is not None:
+            search_body["search_after"] = search_after
+
+        search_response = post(search_url, json=search_body)
+
+        if not search_response.ok:
+            raise Exception(
+                f"Search failed with response: {search_response.status_code} and \
+                    response body: {search_response.json()}")
+
+        response_json = search_response.json()
+        return response_json.get("hits", {}).get("hits", [])
+
+    # We will need to fetch the count and determine how many total docs
+    # are present so that we can do a deep-pagination until we get
+    # all the results
+    total_count = get_count_for_index(index_url)
+    total_hits = []
+
+    # Determine the field we will use for sorting
+    field_for_sorting = "_id"
+    sort_body = [
+        {
+            field_for_sorting: "asc"
+        },
+    ]
+    search_after = None
+    search_url = index_url + "/_search"
+
+    while True:
+        # If we have fetched all the docs, stop!
+        if len(total_hits) >= total_count:
+            break
+
+        # Make the deep pagination call
+        hits_fetched = []
+        try:
+            hits_fetched = make_deep_page_call(
+                search_url, sort_body, search_after)
+        except Exception as e:
+            print(f"Exception while fetching hits: {e}, trying again!")
+            hits_fetched = make_deep_page_call(
+                search_url, sort_body, search_after)
+
+        total_hits.extend(hits_fetched)
+
+        # Fetch the search_after value
+        search_after = hits_fetched[-1].get("sort", None)
+
+    # Once all the hits are fetched, return the hits
+    return total_hits
+
+
 def main():
     """
     Entry point into the script.
@@ -372,6 +454,17 @@ def main():
             ENRICHED_FIELD_NAME,
             ENRICH_TIME_FIELD
         )
+
+        # Fetch all the source docs and start working on them
+        source_docs = fetch_all_docs(
+            urljoin(source_index_url, source_index_name))
+
+        for doc in source_docs:
+            # Use all the input fields to get the synonyms, do them
+            # one by one using the API.
+            #
+            # Create the doc in the index by doing an upsert.
+            pass
 
     except KeyboardInterrupt:
         # Exit gracefully!
