@@ -5,7 +5,7 @@ This script will take care of generating synonyms for the
 dataField(s) that the user specifies.
 """
 
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from urllib.parse import urljoin
 from re import match
 
@@ -287,7 +287,7 @@ def enriched_fields_setup(
     index_name: str,
     meta_field_name: str,
     meta_time_field_name: str
-) -> str:
+) -> Tuple[str, bool]:
     """
     Check if the source index has the metadata field
     and the other fields required. If it already has it,
@@ -300,7 +300,8 @@ def enriched_fields_setup(
     metadata fields added along with the settings of the
     original index.
 
-    This function will return the name of the final index.
+    This function will return the name of the final index and
+    a bool indicating whether a new index was created or not.
     """
     source_mappings = get_mapping(index_url, index_name)
 
@@ -312,7 +313,7 @@ def enriched_fields_setup(
     if meta_field_name in prop_keys and meta_time_field_name in prop_keys:
         # No need for a re-index, both fields are already present.
         # We can directly return the name of the index.
-        return index_name
+        return index_name, False
 
     # We will need to create the temporary index and add the
     temp_index = reindexed_name(index_name)
@@ -336,7 +337,7 @@ def enriched_fields_setup(
         print("response received from create index: ", create_response.json())
         raise Exception(err_msg)
 
-    return temp_index
+    return temp_index, True
 
 
 def main():
@@ -365,7 +366,7 @@ def main():
         # In the second case, we will need to re_index all the data
         # , delete the older index and then set an alias for the new
         # index.
-        index_to_work_on = enriched_fields_setup(
+        index_to_work_on, is_reindex = enriched_fields_setup(
             source_index_url,
             source_index_name,
             ENRICHED_FIELD_NAME,
