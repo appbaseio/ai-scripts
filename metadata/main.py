@@ -10,6 +10,7 @@ from urllib.parse import urljoin
 from re import match
 from json import loads
 from time import time_ns, sleep
+from datetime import datetime
 
 from rich.prompt import Prompt
 from rich import print
@@ -569,6 +570,18 @@ def main():
 
             doc_source = doc.get("_source", {})
             doc_id = doc.get("_id", "")
+
+            # If the doc contains the time_field then make sure that
+            # the field is more than 20 days old or skip the doc.
+            if ENRICH_TIME_FIELD in doc_source:
+                time_in_ms = doc_source.get(ENRICH_TIME_FIELD)
+                added_at = datetime.fromtimestamp(time_in_ms / 1000)
+                current_d = datetime.now()
+
+                if (current_d - added_at).seconds < 20 * 86400:
+                    print("Skipping doc since metadata was added less than 20 days ago: ",
+                          doc_id)
+                    continue
 
             for field in FIELDS_TO_ENRICH:
                 field_synonyms = fetch_synonyms_from_open_ai(
