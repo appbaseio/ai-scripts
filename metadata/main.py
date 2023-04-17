@@ -5,7 +5,7 @@ This script will take care of generating synonyms for the
 dataField(s) that the user specifies.
 """
 
-from typing import List
+from typing import List, Dict
 from urllib.parse import urljoin
 
 from rich.prompt import Prompt
@@ -37,6 +37,22 @@ def get_index_alias(base_url: str, index_name: str) -> str:
 
     # Return the first key inside the object returned
     return list(alias_response.json().keys())[0]
+
+
+def get_mapping(source_url: str, source_index: str) -> Dict:
+    """
+      Return the mapping response for the passed index.
+      """
+    mappings_url = urljoin(source_url, source_index + "/_mappings")
+    response = get(mappings_url)
+
+    if not response.ok:
+        raise Exception(
+            "non OK response received while getting mappings of source index: ",
+            response.status_code)
+
+    mappings_json = response.json()
+    return mappings_json
 
 
 def validate_keys_in_mapping(source_url: str, source_index: str,
