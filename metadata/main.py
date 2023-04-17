@@ -9,11 +9,11 @@ from typing import List, Dict, Tuple
 from urllib.parse import urljoin
 from re import match
 from json import loads
-from time import time_ns
+from time import time_ns, sleep
 
 from rich.prompt import Prompt
 from rich import print
-from requests import get, put, post
+from requests import get, put, post, delete
 
 # Following variable should be updated according
 # to the users requirements
@@ -511,8 +511,8 @@ def main():
         ENRICH_TIME_FIELD = inputs.get("enrich_time_field", "")
 
         source_index_url = inputs.get("cluster_url", "")
-        source_index_name = get_index_alias(
-            source_index_url, inputs.get("index_name", ""))
+        og_index = inputs.get("index_name", "")
+        source_index_name = get_index_alias(source_index_url, og_index)
 
         open_ai_api_key = inputs.get("open_ai_api_key", "")
 
@@ -569,6 +569,64 @@ def main():
                 print("Failed to index document with ID: ", doc_id)
             else:
                 print("Indexed document with ID: ", doc_id)
+
+        # Check if re-indexing was done and if so then we will
+        # need to validate the count, delete the older index
+        # and create an alias for the new one.
+
+        # If it was not done, we don't need to do anything and can
+        # exit right away.
+
+        if not is_reindex:
+            print("Exiting!")
+            exit(0)
+
+        # Verify the count matches between the new and the old index
+
+        # Sleep for 2 seconds before verifying the count
+        sleep(2)
+        source_count = get_count_for_index(
+            urljoin(source_index_url, source_index_name))
+
+        dest_count = get_count_for_index(
+            urljoin(source_index_url, index_to_work_on))
+
+        if source_count != dest_count:
+            raise Exception(
+                f"source index count and destination index count doesn't match, \
+                    aliasing will be skipped. Temporary index is: {index_to_work_on}"
+            )
+
+        # Delete the older index and create alias for the newer index
+        delete_response = delete(urljoin(source_index_url, source_index_name))
+
+        if not delete_response.ok:
+            raise Exception(
+                f"error while deleting source index to create alias with \
+                    status: {delete_response.status_code} and json: {delete_response.json()}"
+            )
+
+        # Since it's deleted, create the alias and exit
+        alias_url = urljoin(source_index_url, "_aliases")
+        alias_body = {
+            "actions": [{
+                "add": {
+                    "index": index_to_work_on,
+                    "alias": og_index
+                }
+            }]
+        }
+
+        alias_response = post(alias_url,
+                              headers={"Content-Type": "application/json"},
+                              json=alias_body)
+
+        if not alias_response.ok:
+            raise Exception(
+                f"error while creating alias with response: {alias_response.status_code} and \
+                    json: {alias_response.json()}")
+
+        print("Alias created successfully, script is complete!")
 
     except KeyboardInterrupt:
         # Exit gracefully!
