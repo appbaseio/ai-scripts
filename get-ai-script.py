@@ -86,7 +86,8 @@ def main():
 
         # Make sure script can be installed
         if script_name not in script_to_url:
-            print(f"{script_name}: not a recognized script!")
+            print(
+                f"{script_name}: not a recognized script!. Supported script keys are: {', '.join(script_to_url.keys())}")
 
         script_path = pull_script(script_to_url.get(
             script_name, None), script_name, tmpdir)
