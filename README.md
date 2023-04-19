@@ -8,10 +8,10 @@ These scripts can be run by a one-click script provided in the repo. The [get-ai
 
 As of now, the following scripts are supported
 
-| Name                       | Description                              | Key        | Details |
-| -------------------------- | ---------------------------------------- | ---------- | ------- | ----------------------------------------- |
-| kNN indexing Script        | Re-Index the data with vector injection  | `knn`      |         | [Read more here](./knn_reindex/README.md) |
-| Metadata Enrichment Script | Enrich the dataset by injecting metadata | `metadata` |         | [Read more here](./metadata/README.md)    |
+| Name                       | Description                              | Key        | Details                                   |
+| -------------------------- | ---------------------------------------- | ---------- | ----------------------------------------- |
+| kNN indexing Script        | Re-Index the data with vector injection  | `knn`      | [Read more here](./knn_reindex/README.md) |
+| Metadata Enrichment Script | Enrich the dataset by injecting metadata | `metadata` | [Read more here](./metadata/README.md)    |
 
 **Get started with the script by doing the following**
 
