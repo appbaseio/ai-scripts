@@ -10,7 +10,6 @@
 import requests
 import sys
 import subprocess
-import tempfile
 import shutil
 from os import path, mkdir, getcwd
 from importlib import import_module
