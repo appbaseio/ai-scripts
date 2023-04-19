@@ -99,7 +99,8 @@ def create_index(base_url: str, index_name: str, source_mappings: Dict,
     }
 
     # Inject the vector datefield mappings
-    source_mappings[VECTOR_TIME_DF_NAME] = {"type": "date"}
+    source_mappings[VECTOR_TIME_DF_NAME] = {
+        "type": "date", "format": "epoch_millis"}
 
     # Inject the knn settings
     source_settings["knn"] = True

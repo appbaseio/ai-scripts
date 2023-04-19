@@ -334,7 +334,7 @@ def enriched_fields_setup(
         }
     }
 
-    props[meta_time_field_name] = {"type": "date"}
+    props[meta_time_field_name] = {"type": "date", "format": "epoch_millis"}
     mappings["properties"] = props
 
     create_body = {
