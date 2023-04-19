@@ -328,18 +328,8 @@ def enriched_fields_setup(
     props[meta_field_name] = {
         "type": "text",
         "fields": {
-            "autosuggest": {
-                "type": "text",
-                "analyzer": "autosuggest_analyzer",
-                "search_analyzer": "standard"
-            },
             "keyword": {
                 "type": "keyword"
-            },
-            "search": {
-                "type": "text",
-                "analyzer": "ngram_analyzer",
-                "search_analyzer": "standard"
             }
         }
     }
@@ -488,7 +478,7 @@ def fetch_synonyms_from_open_ai(field_value: str, openai_key: str) -> List[str]:
     if not len(choices):
         return []
 
-    response_as_str = choices[0].get("messages", {}).get("content", {})
+    response_as_str = choices[0].get("message", {}).get("content", "")
     as_json = loads(response_as_str)
     return as_json.get("synonyms", [])
 
