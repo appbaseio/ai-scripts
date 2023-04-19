@@ -358,7 +358,7 @@ def fetch_all_docs(index_url: str) -> List[Dict]:
     return total_hits
 
 
-def fetch_embeddings_from_open_ai(text_to_embed: str) -> List:
+def fetch_embeddings_from_open_ai(text_to_embed: str, api_key: str) -> List:
     """
       Fetch the embeddings of the passed data from OpenAI
       """
@@ -366,7 +366,7 @@ def fetch_embeddings_from_open_ai(text_to_embed: str) -> List:
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {OPEN_AI_API_KEY}"
+        "Authorization": f"Bearer {api_key}"
     }
 
     body_to_send = {"model": "text-embedding-ada-002", "input": text_to_embed}
@@ -383,7 +383,7 @@ def fetch_embeddings_from_open_ai(text_to_embed: str) -> List:
     return embeddings_response.json().get("data", [])[0].get("embedding", [])
 
 
-def inject_embeddings(doc_source: Dict) -> Dict:
+def inject_embeddings(doc_source: Dict, api_key: str) -> Dict:
     """
       Fetch the embeddings based on the passed document
       """
@@ -395,7 +395,7 @@ def inject_embeddings(doc_source: Dict) -> Dict:
 
     embedding_text = ", ".join(embedding_inputs)
 
-    open_ai_embeddings = fetch_embeddings_from_open_ai(embedding_text)
+    open_ai_embeddings = fetch_embeddings_from_open_ai(embedding_text, api_key)
 
     doc_source[VECTOR_DF_NAME] = open_ai_embeddings
     doc_source[VECTOR_TIME_DF_NAME] = time_ns() // 1_000_000
@@ -690,7 +690,7 @@ def main():
                           doc_id)
                     continue
 
-            doc_with_injection = inject_embeddings(source_obj)
+            doc_with_injection = inject_embeddings(source_obj, OPEN_AI_API_KEY)
 
             # Make the PUT call that will consider upserting as well
             is_created = index_document(dest_URL_base, dest_URL_index,
