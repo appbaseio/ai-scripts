@@ -545,7 +545,8 @@ def ask_user_inputs():
         "open_ai_api_key": {
             "name": "OpenAI API Key",
             "description": "Enter the OpenAI API Key to access OpenAI endpoints",
-            "validate_func": true_validate
+            "validate_func": true_validate,
+            "is_password": True
         }
     }
 
@@ -557,7 +558,8 @@ def ask_user_inputs():
             try_each += 1
 
             input_value = Prompt.ask(f"[blue]{value.get('description')}",
-                                     default=value.get("default", None))
+                                     default=value.get("default", None),
+                                     password=value.get("is_password", False))
 
             if not value.get("validate_func")(input_value):
                 print("[yellow]Input validation failed, please enter again!")
