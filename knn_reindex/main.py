@@ -12,6 +12,7 @@ This script requires the following things:
 """
 
 from requests import get, put, post, delete
+from packaging import version
 from urllib.parse import urlsplit, urljoin
 from typing import Dict, List
 from time import time_ns, sleep
@@ -27,12 +28,12 @@ from rich import print
 # run since these will decide the output and execution
 # of the script.
 SRC_INDEX = "http://localhost:9200/test"  # source index URL
-DEST_INDEX = "http://localhost:9200/test"  # destination index URL
-FIELDS_TO_VECTORIZE = ["Name", "Summary"]  # fields to vectorize and store
+FIELDS_TO_VECTORIZE = ["name", "one_liner", "long_description"]  # fields to vectorize and store
 VECTOR_DF_NAME = "vector_data"  # where to store the vector data
 # field to indicate when vectorization of data occurred
 VECTOR_TIME_DF_NAME = "vector_added_at"
 OPEN_AI_API_KEY = "sk-test"  # OpenAI API key
+DEMO_MODE = True  # Default to demo mode
 
 
 def does_index_exist(base_url: str, index_name: str) -> bool:
@@ -82,29 +83,89 @@ def get_index_alias(base_url: str, index_name: str) -> str:
     return list(alias_response.json().keys())[0]
 
 
-def create_index(base_url: str, index_name: str, source_mappings: Dict,
-                 source_settings: Dict) -> bool:
+def get_search_engine_version(base_url: str) -> str:
     """
-      Create the index with the necessary settings and mappings.
+    Get the version of the search engine (Elasticsearch or OpenSearch)
+    """
+    response = get(base_url)
+    if not response.ok:
+        raise Exception("Failed to get version information")
+    version_info = response.json().get("version", {}).get("number", "")
+    return version_info
+
+
+def update_index_mapping(base_url: str, index_name: str, is_opensearch: bool) -> bool:
+    """
+      Update the index mapping to include vector data fields and timestamp field
       """
-    # Inject the vector data fields mappings
-    source_mappings[VECTOR_DF_NAME] = {
-        "type": "knn_vector",
-        "dimension": 1536,
-        "method": {
+    properties = {
+        VECTOR_DF_NAME: {
+            "type": "knn_vector" if is_opensearch else "dense_vector"
+        },
+        VECTOR_TIME_DF_NAME: {
+            "type": "date",
+            "format": "epoch_millis"
+        }
+    }
+
+    # Add dimension or dims based on search engine
+    if is_opensearch:
+        properties[VECTOR_DF_NAME]["dimension"] = 1536
+        properties[VECTOR_DF_NAME]["method"] = {
             "name": "hnsw",
             "space_type": "cosinesimil",
             "engine": "nmslib"
         }
+    else:
+        properties[VECTOR_DF_NAME]["dims"] = 1536
+
+    mapping_update_body = {
+        "properties": properties
     }
+
+    mapping_url = urljoin(base_url, f"{index_name}/_mapping")
+    mapping_response = put(mapping_url, json=mapping_update_body)
+
+    if not mapping_response.ok:
+        print("error while updating index mapping, got non OK status code: ",
+              mapping_response.status_code)
+        print("response received for put request is: ",
+              mapping_response.json())
+        return False
+
+    return True
+
+
+def create_index(base_url: str, index_name: str, source_mappings: Dict,
+                 source_settings: Dict, is_opensearch: bool) -> bool:
+    """
+      Create the index with the necessary settings and mappings.
+      """
+    # Inject the vector data fields mappings
+    if is_opensearch:
+        source_mappings[VECTOR_DF_NAME] = {
+            "type": "knn_vector",
+            "dimension": 1536,
+            "method": {
+                "name": "hnsw",
+                "space_type": "cosinesimil",
+                "engine": "nmslib"
+            }
+        }
+    else:
+        source_mappings[VECTOR_DF_NAME] = {
+            "type": "dense_vector",
+            "dims": 1536
+        }
 
     # Inject the vector datefield mappings
     source_mappings[VECTOR_TIME_DF_NAME] = {
         "type": "date", "format": "epoch_millis"}
 
     # Inject the knn settings
-    source_settings["knn"] = True
-    source_settings["knn.algo_param.ef_search"] = 100
+    if is_opensearch:
+        source_settings["knn"] = True
+        source_settings["knn.algo_param.ef_search"] = 100
 
     create_index_body = {
         "settings": source_settings,
@@ -125,84 +186,6 @@ def create_index(base_url: str, index_name: str, source_mappings: Dict,
         return False
 
     return True
-
-
-def dest_setup(dest_url: str, dest_index: str, source_mappings: Dict,
-               source_settings: Dict):
-    """
-      Take care of setup of various things in the destination
-      index. This should include:
-      - verifying that `knn` is set in settings
-      - verifying that the vector data field is set with proper
-      mapping.
-      - verifying that the vector_added_at field is set with proper
-      mapping.
-      """
-    # Check if the index already exists
-    is_index_present = does_index_exist(dest_url, dest_index)
-
-    if not is_index_present:
-        # Create the index with the settings and mappings
-        is_created = create_index(dest_url, dest_index, source_mappings,
-                                  source_settings)
-        if not is_created:
-            raise Exception("error while creating index!")
-
-        return
-
-    # If the index is present, we will need to check settings
-    # and mappings to verify that the vector data fields are
-    # present
-
-    settings_url = urljoin(dest_url, dest_index + "/_settings")
-    response = get(settings_url)
-
-    if not response.ok:
-        raise Exception(
-            "non OK response received while getting settings of destination index: ",
-            response.status_code)
-
-    # If ok response was received, we can verify if `knn` is enabled
-    # or not.
-    response_json = response.json()
-
-    is_knn = response_json.get(dest_index, {}).get("settings",
-                                                   {}).get("index",
-                                                           {}).get("knn", False)
-    if not is_knn:
-        # We cannot do anything about it.
-        raise Exception(
-            "`knn` is not enabled on the index. This script cannot enable it automatically since \
-                that will require a the index to be re-created.")
-
-    # We will now need to check the mappings to confirm that the
-    # vector data field and the field to set the vector creation time
-    # is set.
-    mappings_url = urljoin(dest_url, dest_index + "/_mappings")
-    response = get(mappings_url)
-
-    if not response.ok:
-        raise Exception(
-            "non OK response received while getting mappings of destination index: ",
-            response.status_code)
-
-    mappings_json = response.json()
-
-    vector_df = mappings_json.get(dest_index,
-                                  {}).get("mappings",
-                                          {}).get("properties",
-                                                  {}).get(VECTOR_DF_NAME, {})
-    vector_df_dtype = vector_df.get("type", "")
-    vector_df_dimension = vector_df.get("dimension", 0)
-
-    if vector_df_dtype != "knn_vector":
-        raise Exception(
-            "vector field has non vector datatype, cannot continue!")
-
-    # 1536 is the required dimension to store data received from OpenAI
-    if vector_df_dimension != 1536:
-        raise Exception(
-            "vector dimension does not match required dimension of `1536`!")
 
 
 def get_mapping(source_url: str, source_index: str) -> Dict:
@@ -291,7 +274,7 @@ def get_count_for_index(index_url: str) -> int:
     return count_response.json().get("count", 0)
 
 
-def fetch_all_docs(index_url: str) -> List[Dict]:
+def fetch_all_docs(index_url: str, demo_mode: bool) -> List[Dict]:
     """
       Fetch all the documents from the source index in order to iterate through
       them and re-index them with the embeddings added.
@@ -305,6 +288,8 @@ def fetch_all_docs(index_url: str) -> List[Dict]:
             """
         # If the search_after value is not present, we need to ignore it.
         search_body = {"size": 10000, "sort": sort}
+        if demo_mode:
+            search_body = {"size": 10}
 
         if search_after is not None:
             search_body["search_after"] = search_after
@@ -326,7 +311,7 @@ def fetch_all_docs(index_url: str) -> List[Dict]:
     total_hits = []
 
     # Determine the field we will use for sorting
-    field_for_sorting = "_id"
+    field_for_sorting = "id"
     sort_body = [
         {
             field_for_sorting: "asc"
@@ -354,6 +339,10 @@ def fetch_all_docs(index_url: str) -> List[Dict]:
 
         # Fetch the search_after value
         search_after = hits_fetched[-1].get("sort", None)
+
+        if demo_mode and len(total_hits) >= 10:
+            total_hits = total_hits[:10]
+            break
 
     # Once all the hits are fetched, return the hits
     return total_hits
@@ -384,15 +373,19 @@ def fetch_embeddings_from_open_ai(text_to_embed: str, api_key: str) -> List:
     return embeddings_response.json().get("data", [])[0].get("embedding", [])
 
 
-def inject_embeddings(doc_source: Dict, api_key: str) -> Dict:
+def inject_embeddings(doc_source: Dict, fields_to_vectorize: list[str], api_key: str) -> Dict:
     """
       Fetch the embeddings based on the passed document
       """
     # Extract all the keys that are to be used for getting the embeddings
     embedding_inputs = []
 
-    for field_to_vectorize in FIELDS_TO_VECTORIZE:
-        embedding_inputs.append(doc_source.get(field_to_vectorize, ""))
+    for field_to_vectorize in fields_to_vectorize:
+        # Replace None with empty string
+        value = doc_source.get(field_to_vectorize, "")
+        if value is None:
+            value = ""
+        embedding_inputs.append(value)
 
     embedding_text = ", ".join(embedding_inputs)
 
@@ -452,6 +445,8 @@ def ask_user_inputs():
       - VECTOR_DF_NAME (will have default)
       - VECTOR_DF_TIME_NAME (will have default)
       - OPENAI_KEY
+      - DEMO_MODE (default to True)
+      - DEST_INDEX (optional)
       """
     values_to_return = {}
 
@@ -515,18 +510,25 @@ def ask_user_inputs():
         "cluster_url": {
             "name": "Cluster URL",
             "description":
-            "Enter the Cluster URL. Pass basic auth in the URL itself. Eg: http://localhost:9200",
+            "Enter the Cluster URL. Pass basic auth creds in the URL itself. e.g. URL format: https://$user:$pass@mydomain.com, http://localhost:9200",
             "validate_func": validate_url
         },
         "index_name": {
             "name": "Index Name",
-            "description": "Enter the name of the index",
+            "description": "Enter the name of the source index",
             "validate_func": validate_index
+        },
+        "dest_index_name": {
+            "name": "Destination Index Name",
+            "description": "Enter the name of the destination index (defaults to source index name)",
+            "default": "",
+            "validate_func": true_validate
         },
         "fields_to_vectorize": {
             "name": "Fields to Vectorize",
             "description":
             "Enter the fields to be vectorized. Pass them separated by a comma (,). Eg: field1,field2,field3",
+            "default": ",".join(FIELDS_TO_VECTORIZE),
             "validate_func": validate_fields,
             "parser": parse_fields
         },
@@ -546,8 +548,16 @@ def ask_user_inputs():
         "open_ai_api_key": {
             "name": "OpenAI API Key",
             "description": "Enter the OpenAI API Key to access OpenAI endpoints",
+            "default": OPEN_AI_API_KEY,
             "validate_func": true_validate,
             "is_password": True
+        },
+        "demo_mode": {
+            "name": "Demo Mode",
+            "description": "Enable demo mode? This will only index 10 documents, enter false for production indexing mode",
+            "default": "true",
+            "validate_func": lambda x: x.lower() in ["true", "false"],
+            "parser": lambda x: x.lower() == "true"
         }
     }
 
@@ -583,24 +593,6 @@ def ask_user_inputs():
     return values_to_return
 
 
-def reindexed_name(index_name: str) -> str:
-    """
-      Generate the re-indexed name of the index that needs to be
-      setup.
-      """
-    is_match = match(".*reindexed_[0-9]+", index_name)
-
-    if not is_match:
-        return index_name + "_reindexed_1"
-
-    # Since the index has _reindexed in it, we will need to extract
-    # the digit and increment it.
-    tokens = index_name.split("_")
-    tokens[-1] = str(int(tokens[-1]) + 1)
-
-    return "_".join(tokens)
-
-
 def main():
     """
       Entry point into the script.
@@ -612,69 +604,51 @@ def main():
         inputs = ask_user_inputs()
 
         SRC_INDEX = urljoin(inputs.get("cluster_url", ""),
-                            inputs.get("index_name", ""))
-        DEST_INDEX = SRC_INDEX
+                    inputs.get("index_name", ""))
+        DEST_INDEX = urljoin(inputs.get("cluster_url", ""),
+                    inputs.get("dest_index_name", "") or inputs.get("index_name", ""))
         FIELDS_TO_VECTORIZE = inputs.get("fields_to_vectorize", [])
         VECTOR_DF_NAME = inputs.get("vector_df_name", "")
         VECTOR_TIME_DF_NAME = inputs.get("vector_time_df_name", "")
         OPEN_AI_API_KEY = inputs.get("open_ai_api_key", "")
+        DEMO_MODE = inputs.get("demo_mode", True)
+        print("fields_to_vectorize: ", FIELDS_TO_VECTORIZE)
+        print("dest_index_name: ", DEST_INDEX)
 
-        # Indicates if the name passed by the user is an alias
-        # or not.
-        is_passed_name_alias = False
-
-        # Split the source and destination URL's
+        # split the source URL to get the base and the index
         source_URL_splitted = urlsplit(SRC_INDEX)
         source_URL_base = f"{source_URL_splitted.scheme}://{source_URL_splitted.netloc}"
-        # Don't need the prefix `/`
-        older_index = source_URL_splitted.path[1:]
         source_URL_index = get_index_alias(source_URL_base,
                                            source_URL_splitted.path[1:])
 
-        if source_URL_index != older_index:
-            is_passed_name_alias = True
-
+        # split the destination URL to get the base and the index
         dest_URL_splitted = urlsplit(DEST_INDEX)
         dest_URL_base = f"{dest_URL_splitted.scheme}://{dest_URL_splitted.netloc}"
-        og_index = dest_URL_splitted.path[1:]
-        dest_URL_index = get_index_alias(dest_URL_base, og_index)
+        dest_URL_index = get_index_alias(dest_URL_base,
+                                         dest_URL_splitted.path[1:])
 
-        # Check if the source and destination index is the same
-        is_same_index = SRC_INDEX == DEST_INDEX
-        is_reindexing = False
+        # Get the version of the search engine
+        s_version = get_search_engine_version(source_URL_base)
+        is_opensearch = s_version.startswith("2.") or s_version.startswith("7.")
 
-        # Create a temp index that will be used if we need to re-index
-        # the same
-        temp_index = reindexed_name(dest_URL_index)
+        if s_version.startswith("8.") and version.parse(s_version) < version.parse("8.12.0") and not is_opensearch:
+            raise Exception("Elasticsearch versions below 8.12.0 do not support vector indexing with 1536 dimensions. Please upgrade to the latest version.")
 
-        # NOTE: We don't need to validate the source index since that will be validated
-        # when the user input is taken!
-        mappings_json = get_mapping(source_URL_base, source_URL_index)
-        source_mappings: Dict = mappings_json.get(source_URL_index, {}).get(
-            "mappings", {}).get("properties", {})
+        # If the destination index is different and does not exist, create it
+        if DEST_INDEX != SRC_INDEX and not does_index_exist(dest_URL_base, dest_URL_index):
+            source_mappings = get_mapping(source_URL_base, source_URL_index).get(source_URL_index, {}).get("mappings", {}).get("properties", {})
+            source_settings = get_settings(source_URL_base, source_URL_index, True)
+            if not create_index(dest_URL_base, dest_URL_index, source_mappings, source_settings, is_opensearch):
+                raise Exception("Failed to create destination index")
 
-        source_settings = get_settings(source_URL_base, source_URL_index, True)
-
-        # Do the pre-setup of the destination index
-        try:
-            dest_setup(dest_URL_base, dest_URL_index, source_mappings,
-                       source_settings)
-        except Exception as dest_exception:
-            # We don't need to throw an error if the source index and the
-            # destination index is the same.
-            if not is_same_index:
-                raise dest_exception
-
-            # Create the temp index that will be connected to the
-            # actual index as alias
-            is_reindexing = True
-            dest_URL_index = temp_index
-            dest_setup(dest_URL_base, dest_URL_index, source_mappings,
-                       source_settings)
+        # Update the index mapping to include vector and timestamp fields
+        if not update_index_mapping(dest_URL_base, dest_URL_index, is_opensearch):
+            raise Exception("Failed to update index mapping")
 
         # Fetch all the source docs
-        source_docs = fetch_all_docs(SRC_INDEX)
+        source_docs = fetch_all_docs(SRC_INDEX, DEMO_MODE)
 
+        index_count = 0
         for doc in source_docs:
             source_obj = doc.get("_source", {})
             doc_id = doc.get("_id", "")
@@ -686,12 +660,12 @@ def main():
                 added_at = datetime.fromtimestamp(time_in_ms / 1000)
                 current_d = datetime.now()
 
-                if (current_d - added_at).seconds < 2 * 30 * 86400:
+                if (current_d - added_at).days < 60 and DEST_INDEX == SRC_INDEX:
                     print("Skipping doc since vector was added less than 2 months ago: ",
                           doc_id)
                     continue
 
-            doc_with_injection = inject_embeddings(source_obj, OPEN_AI_API_KEY)
+            doc_with_injection = inject_embeddings(source_obj, FIELDS_TO_VECTORIZE, OPEN_AI_API_KEY)
 
             # Make the PUT call that will consider upserting as well
             is_created = index_document(dest_URL_base, dest_URL_index,
@@ -699,63 +673,13 @@ def main():
             if not is_created:
                 print("Failed to index document with ID: ", doc_id)
             else:
-                print("Indexed document with ID: ", doc_id)
+                index_count += 1
+                print(f"{index_count} Indexed document with ID: {doc_id}")
 
-        if not is_reindexing:
-            print("Exiting!")
-            exit(0)
-
-        # If it is the same index, we will need to delete the older
-        # one and set alias for the new one
-
-        # Verify the count matches between the new and the old index
-
-        # Sleep for 2 seconds before verifying the count
-        sleep(2)
-        source_count = get_count_for_index(SRC_INDEX)
-
-        new_dest_url = urljoin(dest_URL_base, dest_URL_index)
-        dest_count = get_count_for_index(new_dest_url)
-
-        if source_count != dest_count:
-            raise Exception(
-                f"source index count and destination index count doesn't match, \
-                    aliasing will be skipped. Temporary index is: {dest_URL_index}"
-            )
-
-        # Delete the older index and create alias for the newer index
-        delete_response = delete(source_URL_base + "/" + source_URL_index)
-
-        if not delete_response.ok:
-            raise Exception(
-                f"error while deleting source index to create alias with \
-                    status: {delete_response.status_code} and json: {delete_response.json()}"
-            )
-
-        # Since it's deleted, create the alias and exit
-        alias_url = urljoin(dest_URL_base, "_aliases")
-        alias_body = {
-            "actions": [{
-                "add": {
-                    "index": temp_index,
-                    "alias": og_index
-                }
-            }]
-        }
-
-        alias_response = post(alias_url,
-                              headers={"Content-Type": "application/json"},
-                              json=alias_body)
-
-        if not alias_response.ok:
-            raise Exception(
-                f"error while creating alias with response: {alias_response.status_code} and \
-                    json: {alias_response.json()}")
-
-        print("Alias created successfully, script is complete!")
+        print("Indexing complete!")
     except KeyboardInterrupt:
         # Exit gracefully!
-        print("\nInterrupt received, exitting!")
+        print("\nInterrupt received, exiting!")
         exit(0)
     except Exception as exc:
         print("\n[bold red]Exception occurred: ", exc)
