@@ -359,7 +359,7 @@ def fetch_embeddings_from_open_ai(text_to_embed: str, api_key: str) -> List:
         "Authorization": f"Bearer {api_key}"
     }
 
-    body_to_send = {"model": "text-embedding-ada-002", "input": text_to_embed}
+    body_to_send = {"model": "text-embedding-3-small", "input": text_to_embed}
 
     embeddings_response = post(embeddings_URL,
                                headers=headers,
