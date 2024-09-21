@@ -30,7 +30,6 @@ from rich import print
 # run since these will decide the output and execution
 # of the script.
 SRC_INDEX = "http://localhost:9200/test"  # source index URL
-DEST_INDEX = "http://localhost:9200/test" # dest index URL
 FIELDS_TO_VECTORIZE = ["name", "one_liner", "long_description"]  # fields to vectorize and store
 VECTOR_DF_NAME = "vector_data"  # where to store the vector data
 # field to indicate when vectorization of data occurred
@@ -659,7 +658,7 @@ def process_and_index_document(doc: Dict, fields_to_vectorize: List[str], vector
         added_at = datetime.fromtimestamp(time_in_ms / 1000)
         current_d = datetime.now()
 
-        if (current_d - added_at).days < 90 and DEST_INDEX == SRC_INDEX:
+        if (current_d - added_at).days < 90:
             print("Skipping fetching of OpenAI embeddings since vector was added less than 90 days ago: ", doc_id)
             # Directly index the document without injecting embeddings
             return index_document(dest_url_base, dest_index, source_obj, doc_id)
