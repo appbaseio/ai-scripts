@@ -18,6 +18,8 @@ from typing import Dict, List
 from time import time_ns, sleep
 from datetime import datetime
 from re import match
+import json
+import os
 
 from rich.prompt import Prompt
 from rich import print
@@ -28,12 +30,31 @@ from rich import print
 # run since these will decide the output and execution
 # of the script.
 SRC_INDEX = "http://localhost:9200/test"  # source index URL
+DEST_INDEX = "http://localhost:9200/test" # dest index URL
 FIELDS_TO_VECTORIZE = ["name", "one_liner", "long_description"]  # fields to vectorize and store
 VECTOR_DF_NAME = "vector_data"  # where to store the vector data
 # field to indicate when vectorization of data occurred
 VECTOR_TIME_DF_NAME = "vector_added_at"
 OPEN_AI_API_KEY = "sk-test"  # OpenAI API key
 DEMO_MODE = True  # Default to demo mode
+
+CONFIG_FILE = "config.json"
+
+def save_user_inputs(inputs: dict):
+    """
+    Save user inputs to a config file (JSON format)
+    """
+    with open(CONFIG_FILE, "w") as config_file:
+        json.dump(inputs, config_file, indent=4)
+
+def load_user_inputs() -> dict:
+    """
+    Load user inputs from the config file if it exists
+    """
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as config_file:
+            return json.load(config_file)
+    return {}
 
 
 def does_index_exist(base_url: str, index_name: str) -> bool:
@@ -96,8 +117,9 @@ def get_search_engine_version(base_url: str) -> str:
 
 def update_index_mapping(base_url: str, index_name: str, is_opensearch: bool) -> bool:
     """
-      Update the index mapping to include vector data fields and timestamp field
-      """
+    Update the index mapping to include vector data fields and timestamp field.
+    Handle cases where the vector type is already correctly set.
+    """
     properties = {
         VECTOR_DF_NAME: {
             "type": "knn_vector" if is_opensearch else "dense_vector"
@@ -113,8 +135,7 @@ def update_index_mapping(base_url: str, index_name: str, is_opensearch: bool) ->
         properties[VECTOR_DF_NAME]["dimension"] = 1536
         properties[VECTOR_DF_NAME]["method"] = {
             "name": "hnsw",
-            "space_type": "cosinesimil",
-            "engine": "nmslib"
+            "engine": "lucene"
         }
     else:
         properties[VECTOR_DF_NAME]["dims"] = 1536
@@ -127,11 +148,21 @@ def update_index_mapping(base_url: str, index_name: str, is_opensearch: bool) ->
     mapping_response = put(mapping_url, json=mapping_update_body)
 
     if not mapping_response.ok:
-        print("error while updating index mapping, got non OK status code: ",
-              mapping_response.status_code)
-        print("response received for put request is: ",
-              mapping_response.json())
-        return False
+        # Check for specific error regarding type conflict
+        response_json = mapping_response.json()
+        error = response_json.get('error', {})
+        root_cause = error.get('root_cause', [{}])[0]
+        if (error.get('type') == 'illegal_argument_exception' and 
+            ('cannot be changed from type [knn_vector] to [knn_vector]' in root_cause.get('reason', '') or
+             f'Mapper for [{VECTOR_DF_NAME}] conflicts with existing mapper' in root_cause.get('reason', ''))):
+            # Log that the type is already correctly set
+            print(f"[yellow]Mapping already set correctly for {VECTOR_DF_NAME}, no changes needed.")
+            return True
+        else:
+            print("Error while updating index mapping, got non-OK status code: ",
+                  mapping_response.status_code)
+            print("Response received for put request is: ", response_json)
+            return False
 
     return True
 
@@ -148,8 +179,7 @@ def create_index(base_url: str, index_name: str, source_mappings: Dict,
             "dimension": 1536,
             "method": {
                 "name": "hnsw",
-                "space_type": "cosinesimil",
-                "engine": "nmslib"
+                "engine": "lucene"
             }
         }
     else:
@@ -432,24 +462,33 @@ def ping_url(url: str) -> bool:
     except Exception:
         return False
 
-
 def ask_user_inputs():
     """
-      Ask for the user inputs and make sure the inputs are validated before accepting
-      them.
+    Ask for the user inputs and make sure the inputs are validated before accepting
+    them. If previously entered inputs exist, load them from the config file and
+    offer the option to reuse or modify.
 
-      We will take the following values as inputs
-      - CLUSTER_URL
-      - INDEX_NAME
+    We will take the following values as inputs:
+      - CLUSTER_URL (source and dest)
+      - INDEX_NAME  (source and dest)
       - FIELDS_TO_VECTORIZE
       - VECTOR_DF_NAME (will have default)
       - VECTOR_DF_TIME_NAME (will have default)
       - OPENAI_KEY
       - DEMO_MODE (default to True)
       - DEST_INDEX (optional)
-      """
+    """
     values_to_return = {}
 
+    # Load previously saved inputs if available
+    saved_inputs = load_user_inputs()
+    if saved_inputs:
+        print("[green]Previous configuration found. Would you like to use it?")
+        use_saved = Prompt.ask("Use previously entered values?", choices=["yes", "no"], default="yes")
+        if use_saved == "yes":
+            return saved_inputs
+
+    # If not using saved values, ask for inputs as before
     def validate_url(input: str) -> bool:
         """
             Validate the URL
@@ -466,7 +505,11 @@ def ask_user_inputs():
         if input is None:
             return False
 
-        index_url = urljoin(values_to_return.get("cluster_url", ""), input)
+        cluster_url = values_to_return.get("cluster_url", "")
+        if not cluster_url.endswith("/"):
+            cluster_url += "/"
+        index_url = urljoin(cluster_url, input)
+        print("pinging index_url: ", index_url)
         return ping_url(index_url)
 
     def validate_fields(input: str) -> bool:
@@ -517,6 +560,12 @@ def ask_user_inputs():
             "name": "Index Name",
             "description": "Enter the name of the source index",
             "validate_func": validate_index
+        },
+        "destination_cluster_url": {
+            "name": "Destination Cluster URL",
+            "description":
+            "Enter the Destination Cluster URL (defaults to source cluster URL)",
+            "validate_func": validate_url
         },
         "dest_index_name": {
             "name": "Destination Index Name",
@@ -590,45 +639,69 @@ def ask_user_inputs():
             print("[bold red]Maximum tries reached for taking input, exiting!")
             exit(-1)
 
+    # Save the inputs to config.json
+    save_user_inputs(values_to_return)
     return values_to_return
+
+
+def process_and_index_document(doc: Dict, fields_to_vectorize: List[str], vector_time_df_name: str, 
+                               open_ai_api_key: str, dest_url_base: str, dest_index: str) -> bool:
+    """
+    Process a single document: inject embeddings and index it. 
+    If vector data already exists and is recent, skip embedding injection.
+    """
+    source_obj = doc.get("_source", {})
+    doc_id = doc.get("_id", "")
+
+    # Check if the vector was added in the last 90 days
+    if vector_time_df_name in source_obj:
+        time_in_ms = source_obj.get(vector_time_df_name)
+        added_at = datetime.fromtimestamp(time_in_ms / 1000)
+        current_d = datetime.now()
+
+        if (current_d - added_at).days < 90 and DEST_INDEX == SRC_INDEX:
+            print("Skipping fetching of OpenAI embeddings since vector was added less than 90 days ago: ", doc_id)
+            # Directly index the document without injecting embeddings
+            return index_document(dest_url_base, dest_index, source_obj, doc_id)
+
+    # Inject embeddings
+    doc_with_injection = inject_embeddings(source_obj, fields_to_vectorize, open_ai_api_key)
+
+    # Index the document with injected embeddings
+    return index_document(dest_url_base, dest_index, doc_with_injection, doc_id)
 
 
 def main():
     """
-      Entry point into the script.
-
-      This script requires python3.7+ due to a time requirement
-      """
-    # Take the inputs
+    Entry point into the script.
+    """
     try:
         inputs = ask_user_inputs()
 
-        SRC_INDEX = urljoin(inputs.get("cluster_url", ""),
-                    inputs.get("index_name", ""))
-        DEST_INDEX = urljoin(inputs.get("cluster_url", ""),
-                    inputs.get("dest_index_name", "") or inputs.get("index_name", ""))
+        SRC_INDEX = urljoin(inputs.get("cluster_url", ""), inputs.get("index_name", ""))
+        DEST_INDEX = urljoin(inputs.get("destination_cluster_url", inputs.get("cluster_url", "")),
+                             inputs.get("dest_index_name", "") or inputs.get("index_name", ""))
         FIELDS_TO_VECTORIZE = inputs.get("fields_to_vectorize", [])
         VECTOR_DF_NAME = inputs.get("vector_df_name", "")
         VECTOR_TIME_DF_NAME = inputs.get("vector_time_df_name", "")
         OPEN_AI_API_KEY = inputs.get("open_ai_api_key", "")
         DEMO_MODE = inputs.get("demo_mode", True)
+
         print("fields_to_vectorize: ", FIELDS_TO_VECTORIZE)
         print("dest_index_name: ", DEST_INDEX)
 
         # split the source URL to get the base and the index
         source_URL_splitted = urlsplit(SRC_INDEX)
         source_URL_base = f"{source_URL_splitted.scheme}://{source_URL_splitted.netloc}"
-        source_URL_index = get_index_alias(source_URL_base,
-                                           source_URL_splitted.path[1:])
+        source_URL_index = get_index_alias(source_URL_base, source_URL_splitted.path[1:])
 
         # split the destination URL to get the base and the index
         dest_URL_splitted = urlsplit(DEST_INDEX)
         dest_URL_base = f"{dest_URL_splitted.scheme}://{dest_URL_splitted.netloc}"
-        dest_URL_index = get_index_alias(dest_URL_base,
-                                         dest_URL_splitted.path[1:])
+        dest_URL_index = get_index_alias(dest_URL_base, dest_URL_splitted.path[1:])
 
         # Get the version of the search engine
-        s_version = get_search_engine_version(source_URL_base)
+        s_version = get_search_engine_version(dest_URL_base)
         is_opensearch = s_version.startswith("2.") or s_version.startswith("7.")
 
         if s_version.startswith("8.") and version.parse(s_version) < version.parse("8.12.0") and not is_opensearch:
@@ -648,43 +721,23 @@ def main():
         # Fetch all the source docs
         source_docs = fetch_all_docs(SRC_INDEX, DEMO_MODE)
 
+        # Process and index each document
         index_count = 0
         for doc in source_docs:
-            source_obj = doc.get("_source", {})
-            doc_id = doc.get("_id", "")
-
-            # If the doc contains the vector_added_at field then make sure that
-            # the field is more than 2 months old or skip the doc.
-            if VECTOR_TIME_DF_NAME in source_obj:
-                time_in_ms = source_obj.get(VECTOR_TIME_DF_NAME)
-                added_at = datetime.fromtimestamp(time_in_ms / 1000)
-                current_d = datetime.now()
-
-                if (current_d - added_at).days < 60 and DEST_INDEX == SRC_INDEX:
-                    print("Skipping doc since vector was added less than 2 months ago: ",
-                          doc_id)
-                    continue
-
-            doc_with_injection = inject_embeddings(source_obj, FIELDS_TO_VECTORIZE, OPEN_AI_API_KEY)
-
-            # Make the PUT call that will consider upserting as well
-            is_created = index_document(dest_URL_base, dest_URL_index,
-                                        doc_with_injection, doc_id)
-            if not is_created:
-                print("Failed to index document with ID: ", doc_id)
-            else:
+            if process_and_index_document(doc, FIELDS_TO_VECTORIZE, VECTOR_TIME_DF_NAME, OPEN_AI_API_KEY, dest_URL_base, dest_URL_index):
                 index_count += 1
-                print(f"{index_count} Indexed document with ID: {doc_id}")
+                print(f"{index_count} Indexed document with ID: {doc.get('_id', '')}")
+            else:
+                print(f"Failed to index document with ID: {doc.get('_id', '')}")
 
         print("Indexing complete!")
     except KeyboardInterrupt:
-        # Exit gracefully!
+        # Exit gracefully
         print("\nInterrupt received, exiting!")
         exit(0)
     except Exception as exc:
         print("\n[bold red]Exception occurred: ", exc)
         exit(-1)
-
 
 if __name__ == "__main__":
     main()
